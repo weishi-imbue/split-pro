@@ -58,6 +58,7 @@ export NEXTAUTH_URL_INTERNAL="http://127.0.0.1:3000"
 export ENABLE_SENDING_INVITES="false"
 export DISABLE_EMAIL_SIGNUP="false"
 export INVITE_ONLY="false"
+export OPENHOST_OWNER_EMAIL="owner@${DOMAIN_NAME}"
 export DATA_DIR
 export PORT=3000
 

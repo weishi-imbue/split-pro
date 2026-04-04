@@ -5,7 +5,7 @@ description = "Expense splitting app — self-hosted Splitwise alternative"
 
 [runtime.container]
 image = "Dockerfile.openhost"
-port = 3000
+port = 8080
 
 [routing]
 # Let NextAuth handle its own auth — all paths accessible without openhost gate

@@ -42,6 +42,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-16 \
     postgresql-16-cron \
     supervisor \
+    caddy \
+    python3 python3-pip python3-venv \
     && apt-get purge -y gnupg lsb-release \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* \
@@ -57,16 +59,21 @@ COPY --from=base /app/public ./public
 COPY --from=base /app/prisma ./prisma
 RUN npm install -g prisma@6
 
+# Auth bridge dependencies
+RUN pip install --no-cache-dir --break-system-packages flask psycopg2-binary
+
 # OpenHost config files
 COPY openhost.toml ./openhost.toml
 COPY openhost_start.sh ./openhost_start.sh
 COPY openhost_supervisor.conf ./openhost_supervisor.conf
+COPY openhost_auth.py ./openhost_auth.py
+COPY Caddyfile ./Caddyfile
 
 RUN chmod +x ./openhost_start.sh
 
 # Create logs directory
 RUN mkdir -p /app/logs
 
-EXPOSE 3000
+EXPOSE 8080
 
 CMD ["/app/openhost_start.sh"]

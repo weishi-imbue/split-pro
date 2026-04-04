@@ -1,0 +1,12 @@
+{
+    auto_https off
+}
+
+:8080 {
+    handle /* {
+        forward_auth 127.0.0.1:3006 {
+            uri /check-session
+        }
+        reverse_proxy 127.0.0.1:3000
+    }
+}
