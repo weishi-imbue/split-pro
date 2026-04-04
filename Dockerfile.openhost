@@ -1,0 +1,72 @@
+ARG NODE_VERSION=22.16.0
+
+# === Build stage (Debian to match runtime for Prisma engine compatibility) ===
+FROM node:${NODE_VERSION}-bookworm-slim AS base
+
+ENV SKIP_ENV_VALIDATION="true"
+ENV DOCKER_OUTPUT=1
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+RUN npm i -g corepack@latest && corepack enable
+COPY package.json pnpm-lock.yaml prisma/ ./
+
+RUN pnpm install --frozen-lockfile
+
+COPY . .
+
+RUN pnpm build
+
+# === Runtime stage: Node.js + PostgreSQL (with pg_cron) + supervisord ===
+FROM node:${NODE_VERSION}-bookworm-slim AS release
+
+ENV NODE_ENV=production
+ENV DOCKER_OUTPUT=1
+ENV SKIP_ENV_VALIDATION="false"
+
+WORKDIR /app
+
+# Add PostgreSQL APT repository (PGDG) for pg16 + pg_cron
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates gnupg lsb-release \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+       | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+       > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-16 \
+    postgresql-16-cron \
+    supervisor \
+    && apt-get purge -y gnupg lsb-release \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /run/postgresql \
+    && chown -R postgres:postgres /run/postgresql
+
+# Copy the built Next.js standalone app
+COPY --from=base /app/.next/standalone ./
+COPY --from=base /app/.next/static ./.next/static
+COPY --from=base /app/public ./public
+
+# Prisma: copy schema + migrations, install CLI for running migrations
+COPY --from=base /app/prisma ./prisma
+RUN npm install -g prisma@6
+
+# OpenHost config files
+COPY openhost.toml ./openhost.toml
+COPY openhost_start.sh ./openhost_start.sh
+COPY openhost_supervisor.conf ./openhost_supervisor.conf
+
+RUN chmod +x ./openhost_start.sh
+
+# Create logs directory
+RUN mkdir -p /app/logs
+
+EXPOSE 3000
+
+CMD ["/app/openhost_start.sh"]
