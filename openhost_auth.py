@@ -188,9 +188,48 @@ def _find_or_create_guest(name):
         user_id = cur.fetchone()["id"]
         conn.commit()
         log.info("Created guest user %s (%s)", name, email)
+
+        # Add guest to a shared group with the owner
+        _ensure_shared_group(conn, user_id, name)
+
         return user_id
     finally:
         conn.close()
+
+
+def _ensure_shared_group(conn, guest_user_id, guest_name):
+    """Ensure the owner and guest are in a shared group together."""
+    cur = conn.cursor()
+
+    # Find owner user id
+    cur.execute('SELECT id FROM "User" WHERE email = %s', (OWNER_EMAIL,))
+    owner_row = cur.fetchone()
+    if not owner_row:
+        log.warning("Owner user not found, skipping group creation")
+        return
+    owner_id = owner_row["id"]
+
+    # Create a group for this guest
+    public_id = secrets.token_urlsafe(16)
+    now = datetime.now(timezone.utc)
+    cur.execute(
+        'INSERT INTO "Group" ("publicId", name, "userId", "defaultCurrency", "createdAt", "updatedAt") '
+        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+        (public_id, f"With {guest_name}", owner_id, "USD", now, now),
+    )
+    group_id = cur.fetchone()["id"]
+
+    # Add both owner and guest as members
+    cur.execute(
+        'INSERT INTO "GroupUser" ("groupId", "userId") VALUES (%s, %s)',
+        (group_id, owner_id),
+    )
+    cur.execute(
+        'INSERT INTO "GroupUser" ("groupId", "userId") VALUES (%s, %s)',
+        (group_id, guest_user_id),
+    )
+    conn.commit()
+    log.info("Created shared group '%s' (id=%s) for owner + %s", f"With {guest_name}", group_id, guest_name)
 
 
 def _app_url():
