@@ -3,6 +3,10 @@
 }
 
 :8080 {
+    handle /invite* {
+        reverse_proxy 127.0.0.1:3006
+    }
+
     handle /* {
         forward_auth 127.0.0.1:3006 {
             uri /check-session
