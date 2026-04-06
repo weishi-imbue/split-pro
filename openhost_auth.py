@@ -188,48 +188,50 @@ def _find_or_create_guest(name):
         user_id = cur.fetchone()["id"]
         conn.commit()
         log.info("Created guest user %s (%s)", name, email)
-
-        # Add guest to a shared group with the owner
-        _ensure_shared_group(conn, user_id, name)
-
         return user_id
     finally:
         conn.close()
 
 
-def _ensure_shared_group(conn, guest_user_id, guest_name):
-    """Ensure the owner and guest are in a shared group together."""
-    cur = conn.cursor()
+def _add_user_to_group(guest_user_id, group_id):
+    """Add a user to a group if not already a member."""
+    conn = _db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT 1 FROM "GroupUser" WHERE "groupId" = %s AND "userId" = %s',
+            (group_id, guest_user_id),
+        )
+        if cur.fetchone():
+            return  # already a member
+        cur.execute(
+            'INSERT INTO "GroupUser" ("groupId", "userId") VALUES (%s, %s)',
+            (group_id, guest_user_id),
+        )
+        conn.commit()
+        log.info("Added user %s to group %s", guest_user_id, group_id)
+    finally:
+        conn.close()
 
-    # Find owner user id
-    cur.execute('SELECT id FROM "User" WHERE email = %s', (OWNER_EMAIL,))
-    owner_row = cur.fetchone()
-    if not owner_row:
-        log.warning("Owner user not found, skipping group creation")
-        return
-    owner_id = owner_row["id"]
 
-    # Create a group for this guest
-    public_id = secrets.token_urlsafe(16)
-    now = datetime.now(timezone.utc)
-    cur.execute(
-        'INSERT INTO "Group" ("publicId", name, "userId", "defaultCurrency", "createdAt", "updatedAt") '
-        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-        (public_id, f"With {guest_name}", owner_id, "USD", now, now),
-    )
-    group_id = cur.fetchone()["id"]
-
-    # Add both owner and guest as members
-    cur.execute(
-        'INSERT INTO "GroupUser" ("groupId", "userId") VALUES (%s, %s)',
-        (group_id, owner_id),
-    )
-    cur.execute(
-        'INSERT INTO "GroupUser" ("groupId", "userId") VALUES (%s, %s)',
-        (group_id, guest_user_id),
-    )
-    conn.commit()
-    log.info("Created shared group '%s' (id=%s) for owner + %s", f"With {guest_name}", group_id, guest_name)
+def _get_owner_groups():
+    """Get all groups the owner belongs to."""
+    conn = _db()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT id FROM "User" WHERE email = %s', (OWNER_EMAIL,))
+        owner_row = cur.fetchone()
+        if not owner_row:
+            return []
+        cur.execute(
+            'SELECT g.id, g.name, g."publicId" FROM "Group" g '
+            'JOIN "GroupUser" gu ON g.id = gu."groupId" '
+            'WHERE gu."userId" = %s ORDER BY g."createdAt" DESC',
+            (owner_row["id"],),
+        )
+        return cur.fetchall()
+    finally:
+        conn.close()
 
 
 def _app_url():
@@ -245,8 +247,9 @@ def invite_page():
         return Response("Only the zone owner can manage invites", status=403)
 
     invites = _load_invites()
+    groups = _get_owner_groups()
     base_url = _app_url()
-    return render_template_string(INVITE_TEMPLATE, invites=invites, base_url=base_url)
+    return render_template_string(INVITE_TEMPLATE, invites=invites, groups=groups, base_url=base_url)
 
 
 @app.route("/invite/create", methods=["POST"])
@@ -256,17 +259,33 @@ def create_invite():
         return Response("Unauthorized", status=401)
 
     name = request.form.get("name", "").strip()
+    group_id = request.form.get("group_id", "").strip()
     if not name:
         return Response("Name is required", status=400)
 
     token = secrets.token_urlsafe(16)
     invites = _load_invites()
-    invites[token] = {
+    invite_data = {
         "name": name,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if group_id:
+        # Store group info for display
+        conn = _db()
+        try:
+            cur = conn.cursor()
+            cur.execute('SELECT name, "publicId" FROM "Group" WHERE id = %s', (int(group_id),))
+            group_row = cur.fetchone()
+            if group_row:
+                invite_data["group_id"] = int(group_id)
+                invite_data["group_name"] = group_row["name"]
+                invite_data["group_public_id"] = group_row["publicId"]
+        finally:
+            conn.close()
+
+    invites[token] = invite_data
     _save_invites(invites)
-    log.info("Created invite for %s", name)
+    log.info("Created invite for %s (group: %s)", name, invite_data.get("group_name", "none"))
     return redirect("/invite")
 
 
@@ -292,12 +311,23 @@ def join_via_invite():
     if token not in invites:
         return Response("Invalid or expired invite link", status=403)
 
-    name = invites[token]["name"]
+    invite = invites[token]
+    name = invite["name"]
     user_id = _find_or_create_guest(name)
     session_token, expires = _create_session(user_id)
 
-    # Redirect to balances page directly (not / which is the landing page)
-    resp = redirect("/en/balances")
+    # Add guest to the specified group
+    group_id = invite.get("group_id")
+    group_public_id = invite.get("group_public_id")
+    if group_id:
+        _add_user_to_group(user_id, group_id)
+
+    # Redirect to the group page if specified, otherwise balances
+    if group_public_id:
+        redirect_to = f"/en/groups/{group_public_id}"
+    else:
+        redirect_to = "/en/balances"
+    resp = redirect(redirect_to)
     # Set both cookie variants — Safari needs the non-__Secure- one
     resp.set_cookie(
         SESSION_COOKIE_SECURE, session_token,
@@ -333,31 +363,43 @@ INVITE_TEMPLATE = """\
     h2 { color: #4ecdc4; }
     table { width: 100%; border-collapse: collapse; margin: 1em 0; }
     th, td { text-align: left; padding: 0.5em; border-bottom: 1px solid #333; }
-    .add-form { margin: 1.5em 0; display: flex; gap: 0.5em; }
-    .add-form input[type=text] { flex: 1; padding: 0.5em; border-radius: 4px; border: 1px solid #444; background: #2a2a3e; color: #e0e0e0; }
+    .add-form { margin: 1.5em 0; display: flex; flex-wrap: wrap; gap: 0.5em; }
+    .add-form input[type=text] { flex: 1; min-width: 150px; padding: 0.5em; border-radius: 4px; border: 1px solid #444; background: #2a2a3e; color: #e0e0e0; }
+    .add-form select { padding: 0.5em; border-radius: 4px; border: 1px solid #444; background: #2a2a3e; color: #e0e0e0; }
     button { padding: 0.5em 1em; border-radius: 4px; border: none; cursor: pointer; }
     .add-btn { background: #4ecdc4; color: #1a1a2e; font-weight: bold; }
     .remove-btn { background: #333; color: #c00; font-size: 0.85em; border: 1px solid #c00; }
     .link { font-family: monospace; font-size: 0.85em; word-break: break-all; color: #4ecdc4; }
     .copy-btn { background: #333; color: #4ecdc4; font-size: 0.8em; border: 1px solid #4ecdc4; margin-left: 0.5em; }
+    .group-tag { font-size: 0.8em; color: #888; }
     a { color: #4ecdc4; }
+    .hint { color: #888; font-size: 0.9em; margin-top: 0.5em; }
   </style>
 </head>
 <body>
   <h2>Invite Friends to SplitPro</h2>
-  <p>Create invite links for friends. Each link logs them in as that person.</p>
+  <p>Create invite links for friends. Each link logs them in and adds them to the group.</p>
 
   <form method="post" action="/invite/create" class="add-form">
-    <input type="text" name="name" placeholder="Friend's name (e.g. Alice)" required>
+    <input type="text" name="name" placeholder="Friend's name" required>
+    <select name="group_id">
+      <option value="">No group</option>
+      {% for g in groups %}
+      <option value="{{ g.id }}">{{ g.name }}</option>
+      {% endfor %}
+    </select>
     <button type="submit" class="add-btn">Create Link</button>
   </form>
+  {% if not groups %}
+  <p class="hint">No groups yet. <a href="/en/groups">Create a group</a> in SplitPro first, then invite friends to it.</p>
+  {% endif %}
 
   {% if invites %}
   <table>
     <tr><th>Name</th><th>Invite Link</th><th></th></tr>
     {% for token, info in invites.items() %}
     <tr>
-      <td>{{ info.name }}</td>
+      <td>{{ info.name }}{% if info.group_name %}<br><span class="group-tag">→ {{ info.group_name }}</span>{% endif %}</td>
       <td>
         <span class="link" id="link-{{ loop.index }}">{{ base_url }}/invite/join?t={{ token }}</span>
         <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('link-{{ loop.index }}').textContent)">Copy</button>
