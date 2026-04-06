@@ -38,6 +38,9 @@ INVITES_FILE = os.path.join(DATA_DIR, "invites.json")
 SESSION_COOKIE = "next-auth.session-token"
 SESSION_COOKIE_SECURE = "__Secure-next-auth.session-token"
 
+# Our own cookie to remember which user this browser is (survives NextAuth session rotation)
+IDENTITY_COOKIE = "openhost-user-id"
+
 
 def _db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
@@ -111,49 +114,74 @@ def _validate_session(token):
         conn.close()
 
 
+def _set_session_cookies(resp, session_token, expires, user_id):
+    """Set NextAuth session cookies + our identity cookie on a response."""
+    resp.set_cookie(
+        SESSION_COOKIE_SECURE, session_token,
+        expires=expires, path="/", httponly=True, secure=True, samesite="Lax",
+    )
+    resp.set_cookie(
+        SESSION_COOKIE, session_token,
+        expires=expires, path="/", httponly=True, samesite="Lax",
+    )
+    # Long-lived identity cookie so we can recover if NextAuth loses the session
+    resp.set_cookie(
+        IDENTITY_COOKIE, str(user_id),
+        max_age=60 * 60 * 24 * 365, path="/", httponly=True, samesite="Lax",
+    )
+    return resp
+
+
 @app.route("/check-session")
 def check_session():
-    """Forward-auth endpoint: auto-login zone owner into Split-Pro."""
+    """Forward-auth endpoint: auto-login zone owner and guests into Split-Pro."""
     # Check existing session cookie
     existing = request.cookies.get(SESSION_COOKIE_SECURE) or request.cookies.get(SESSION_COOKIE)
     if existing and _validate_session(existing):
         return Response("ok", status=200)
 
-    # Not the owner? Let them through (Split-Pro will show its own login)
-    if not _is_owner(request):
+    # Determine user_id: owner gets auto-created, guests recovered from identity cookie
+    user_id = None
+    if _is_owner(request):
+        try:
+            user_id = _find_or_create_user()
+        except Exception as e:
+            log.error("Failed to find/create owner: %s", e)
+    else:
+        # Check if this browser previously logged in as a guest
+        identity = request.cookies.get(IDENTITY_COOKIE)
+        if identity:
+            try:
+                uid = int(identity)
+                conn = _db()
+                try:
+                    cur = conn.cursor()
+                    cur.execute('SELECT id FROM "User" WHERE id = %s', (uid,))
+                    if cur.fetchone():
+                        user_id = uid
+                finally:
+                    conn.close()
+            except (ValueError, Exception):
+                pass
+
+    if user_id is None:
+        # Unknown visitor — let them through, Split-Pro will show landing page
         return Response("ok", status=200)
 
-    # Owner without valid session — create one
+    # Create a fresh NextAuth session
     try:
-        user_id = _find_or_create_user()
         token, expires = _create_session(user_id)
     except Exception as e:
         log.error("Failed to create session: %s", e)
         return Response("ok", status=200)
 
-    # Redirect to the original URL with the new session cookie
     original_uri = request.headers.get("X-Forwarded-Uri", "/")
+    # Avoid redirect loops on auth callback URLs
+    if "error=SessionRequired" in (original_uri or ""):
+        original_uri = "/en/balances"
     resp = redirect(original_uri)
-
-    # Set both secure and non-secure cookie names for compatibility
-    resp.set_cookie(
-        SESSION_COOKIE_SECURE,
-        token,
-        expires=expires,
-        path="/",
-        httponly=True,
-        secure=True,
-        samesite="Lax",
-    )
-    resp.set_cookie(
-        SESSION_COOKIE,
-        token,
-        expires=expires,
-        path="/",
-        httponly=True,
-        samesite="Lax",
-    )
-    log.info("Auto-logged in zone owner")
+    _set_session_cookies(resp, token, expires, user_id)
+    log.info("Auto-login for user_id=%s (uri=%s)", user_id, original_uri)
     return resp
 
 
@@ -327,16 +355,8 @@ def join_via_invite():
     else:
         redirect_to = "/en/balances"
     resp = redirect(redirect_to)
-    # Set both cookie variants — Safari needs the non-__Secure- one
-    resp.set_cookie(
-        SESSION_COOKIE_SECURE, session_token,
-        expires=expires, path="/", httponly=True, secure=True, samesite="Lax",
-    )
-    resp.set_cookie(
-        SESSION_COOKIE, session_token,
-        expires=expires, path="/", httponly=True, samesite="Lax",
-    )
-    log.info("Guest %s logged in via invite", name)
+    _set_session_cookies(resp, session_token, expires, user_id)
+    log.info("Guest %s (user_id=%s) logged in via invite", name, user_id)
     return resp
 
 
