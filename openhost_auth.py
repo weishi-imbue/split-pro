@@ -318,13 +318,12 @@ def join_via_invite():
 
     # Add guest to the specified group
     group_id = invite.get("group_id")
-    group_public_id = invite.get("group_public_id")
     if group_id:
         _add_user_to_group(user_id, group_id)
 
     # Redirect to the group page if specified, otherwise balances
-    if group_public_id:
-        redirect_to = f"/en/groups/{group_public_id}"
+    if group_id:
+        redirect_to = f"/en/groups/{group_id}"
     else:
         redirect_to = "/en/balances"
     resp = redirect(redirect_to)
