@@ -257,7 +257,9 @@ def join_via_invite():
     user_id = _find_or_create_guest(name)
     session_token, expires = _create_session(user_id)
 
-    resp = redirect("/")
+    # Redirect to balances page directly (not / which is the landing page)
+    resp = redirect("/en/balances")
+    # Set both cookie variants — Safari needs the non-__Secure- one
     resp.set_cookie(
         SESSION_COOKIE_SECURE, session_token,
         expires=expires, path="/", httponly=True, secure=True, samesite="Lax",
