@@ -38,6 +38,7 @@ export const env = createEnv({
     EMAIL_SERVER_PORT: z.string().optional(),
     EMAIL_SERVER_USER: z.string().optional(),
     EMAIL_SERVER_PASSWORD: z.string().optional(),
+    EMAIL_TLS_REJECT_UNAUTHORIZED: z.boolean().default(true),
     GOCARDLESS_COUNTRY: z.string().optional(),
     GOCARDLESS_SECRET_ID: z.string().optional(),
     GOCARDLESS_SECRET_KEY: z.string().optional(),
@@ -76,13 +77,11 @@ export const env = createEnv({
   /**
    * Specify your client-side environment variables schema here. This way you can ensure the app
    * isn't built with invalid env vars. To expose them to the client, prefix them with
-   * `NEXT_PUBLIC_`.
+   * `NEXT_PUBLIC_`. Note that these are only evaluated at build time!
    */
   client: {
-    NEXT_PUBLIC_FRANKFURTER_USED: z.boolean().default(false),
-    NEXT_PUBLIC_IS_CLOUD_DEPLOYMENT: z.boolean().default(false),
-    NEXT_PUBLIC_UPLOAD_MAX_FILE_SIZE_MB: z.coerce.number().int().positive().default(10),
-    NEXT_PUBLIC_VERSION: z.string().optional(),
+    NEXT_PUBLIC_APP_VERSION: z.string().optional(),
+    NEXT_PUBLIC_GIT_SHA: z.string().optional(),
   },
 
   /**
@@ -108,6 +107,9 @@ export const env = createEnv({
     EMAIL_SERVER_PORT: process.env.EMAIL_SERVER_PORT,
     EMAIL_SERVER_USER: process.env.EMAIL_SERVER_USER,
     EMAIL_SERVER_PASSWORD: process.env.EMAIL_SERVER_PASSWORD,
+    EMAIL_TLS_REJECT_UNAUTHORIZED: process.env.EMAIL_TLS_REJECT_UNAUTHORIZED
+      ? Boolean(process.env.EMAIL_TLS_REJECT_UNAUTHORIZED)
+      : true,
     GOCARDLESS_COUNTRY: process.env.GOCARDLESS_COUNTRY,
     GOCARDLESS_SECRET_ID: process.env.GOCARDLESS_SECRET_ID,
     GOCARDLESS_SECRET_KEY: process.env.GOCARDLESS_SECRET_KEY,
@@ -138,15 +140,11 @@ export const env = createEnv({
     OIDC_CLIENT_SECRET: process.env.OIDC_CLIENT_SECRET,
     OIDC_WELL_KNOWN_URL: process.env.OIDC_WELL_KNOWN_URL,
     OIDC_ALLOW_DANGEROUS_EMAIL_LINKING: Boolean(process.env.OIDC_ALLOW_DANGEROUS_EMAIL_LINKING),
-    NEXT_PUBLIC_FRANKFURTER_USED: process.env.CURRENCY_RATE_PROVIDER === 'frankfurter',
-    NEXT_PUBLIC_IS_CLOUD_DEPLOYMENT: process.env.NEXTAUTH_URL?.includes('splitpro.app') ?? false,
-    NEXT_PUBLIC_UPLOAD_MAX_FILE_SIZE_MB: process.env.UPLOAD_MAX_FILE_SIZE_MB
-      ? Number(process.env.UPLOAD_MAX_FILE_SIZE_MB)
-      : 10,
     UPLOAD_MAX_FILE_SIZE_MB: process.env.UPLOAD_MAX_FILE_SIZE_MB
       ? Number(process.env.UPLOAD_MAX_FILE_SIZE_MB)
       : 10,
-    NEXT_PUBLIC_VERSION: process.env.APP_VERSION,
+    NEXT_PUBLIC_APP_VERSION: process.env.NEXT_PUBLIC_APP_VERSION,
+    NEXT_PUBLIC_GIT_SHA: process.env.NEXT_PUBLIC_GIT_SHA,
   },
   /**
    * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially

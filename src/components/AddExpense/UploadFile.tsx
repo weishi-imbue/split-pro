@@ -3,54 +3,50 @@ import React, { useState } from 'react';
 import { toast } from 'sonner';
 import { useTranslation } from 'next-i18next';
 
-import { env } from '~/env';
 import { useAddExpenseStore } from '~/store/addStore';
+import { prepareImageForUpload, uploadImage, validateUploadSize } from '~/utils/imageUpload';
 
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
+import { useAppStore } from '~/store/appStore';
 
 export const UploadFile: React.FC = () => {
   const { t } = useTranslation();
   const [file, setFile] = useState<File | null>(null);
+  const maxUploadFileSizeMB = useAppStore((s) => s.maxUploadFileSizeMB);
   const fileKey = useAddExpenseStore((s) => s.fileKey);
   const { setFileUploading, setFileKey } = useAddExpenseStore((s) => s.actions);
 
   const handleFileChange = React.useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
       const { files } = event.target;
-      const file = files?.[0];
+
+      let file = files?.[0];
 
       if (!file) {
         return;
       }
 
-      const fileSizeLimit = env.NEXT_PUBLIC_UPLOAD_MAX_FILE_SIZE_MB * 1024 * 1024;
-
-      if (file.size > fileSizeLimit) {
-        toast.error(`${t('errors.less_than')} ${env.NEXT_PUBLIC_UPLOAD_MAX_FILE_SIZE_MB}MB`);
-        return;
-      }
-
-      setFile(file);
-      setFileUploading(true);
-
-      const formData = new FormData();
-      formData.append('file', file);
-
       try {
-        const response = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          throw new Error(response.statusText);
+        try {
+          file = await prepareImageForUpload(file, maxUploadFileSizeMB);
+        } catch (error) {
+          console.error('Compression failed:', error);
+          toast.error(t('errors.image_compression_failed'));
         }
 
-        const data = await response.json();
+        if (!validateUploadSize(file, maxUploadFileSizeMB)) {
+          toast.error(t('errors.less_than', { size: maxUploadFileSizeMB }));
+          return;
+        }
+
+        setFile(file);
+        setFileUploading(true);
+
+        const key = await uploadImage(file);
 
         toast.success(t('expense_details.add_expense_details.upload_file.messages.upload_success'));
-        setFileKey(data.key);
+        setFileKey(key);
       } catch (error) {
         console.error('Upload error:', error);
         toast.error(t('errors.uploading_error'));
@@ -59,7 +55,7 @@ export const UploadFile: React.FC = () => {
         setFileUploading(false);
       }
     },
-    [setFileUploading, setFileKey, t],
+    [setFileUploading, setFileKey, maxUploadFileSizeMB, t],
   );
 
   return (
