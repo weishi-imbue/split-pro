@@ -6,6 +6,12 @@ import { simplifyDebts } from '~/lib/simplify';
 import { createTRPCRouter, groupProcedure, protectedProcedure } from '~/server/api/trpc';
 import { sendGroupSimplifyDebtsToggleNotification } from '~/server/api/services/notificationService';
 import { SplitType } from '@prisma/client';
+import {
+  defaultSplitInputSchema,
+  deserializeDefaultSplit,
+  parseSerializedDefaultSplit,
+  serializeDefaultSplit,
+} from '~/lib/defaultSplit';
 
 export const groupRouter = createTRPCRouter({
   create: protectedProcedure
@@ -119,6 +125,8 @@ export const groupRouter = createTRPCRouter({
         },
       });
 
+      await ctx.db.groupDefaultSplit.deleteMany({ where: { groupId: group.id } });
+
       return group;
     }),
 
@@ -134,14 +142,29 @@ export const groupRouter = createTRPCRouter({
           },
         },
         groupBalances: true,
+        groupDefaultSplit: true,
       },
     });
 
-    if (group?.simplifyDebts) {
+    if (!group) {
+      return group;
+    }
+
+    if (group.simplifyDebts) {
       group.groupBalances = simplifyDebts(group.groupBalances);
     }
 
-    return group;
+    const defaultSplit =
+      group.groupDefaultSplit &&
+      parseSerializedDefaultSplit(
+        group.groupDefaultSplit.splitType,
+        group.groupDefaultSplit.shares,
+      );
+
+    return {
+      ...group,
+      defaultSplit,
+    };
   }),
 
   getGroupTotals: groupProcedure.query(async ({ input, ctx }) => {
@@ -171,6 +194,8 @@ export const groupRouter = createTRPCRouter({
           userId,
         })),
       });
+
+      await ctx.db.groupDefaultSplit.deleteMany({ where: { groupId: input.groupId } });
 
       return groupUsers;
     }),
@@ -209,14 +234,14 @@ export const groupRouter = createTRPCRouter({
         });
       }
 
-      const simplifyDebts = !group.simplifyDebts;
+      const simplifyDebtsInv = !group.simplifyDebts;
 
       await ctx.db.group.update({
         where: {
           id: input.groupId,
         },
         data: {
-          simplifyDebts,
+          simplifyDebts: simplifyDebtsInv,
         },
       });
 
@@ -224,7 +249,7 @@ export const groupRouter = createTRPCRouter({
       void sendGroupSimplifyDebtsToggleNotification(
         input.groupId,
         ctx.session.user.id,
-        simplifyDebts,
+        simplifyDebtsInv,
       );
 
       return simplifyDebts;
@@ -273,11 +298,60 @@ export const groupRouter = createTRPCRouter({
         },
       });
 
+      await ctx.db.groupDefaultSplit.deleteMany({ where: { groupId: input.groupId } });
+
       return groupUser;
     }),
 
+  upsertDefaultSplit: groupProcedure
+    .input(
+      z.object({
+        groupId: z.number(),
+        defaultSplit: defaultSplitInputSchema,
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const parsed = deserializeDefaultSplit(input.defaultSplit);
+      if (!parsed) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Malformed default split' });
+      }
+
+      const serialized = serializeDefaultSplit(parsed);
+
+      const groupDefaultSplit = await ctx.db.groupDefaultSplit.upsert({
+        where: { groupId: input.groupId },
+        create: {
+          groupId: input.groupId,
+          splitType: serialized.splitType,
+          shares: serialized.shares,
+        },
+        update: {
+          splitType: serialized.splitType,
+          shares: serialized.shares,
+        },
+      });
+
+      return {
+        splitType: groupDefaultSplit.splitType,
+        shares: serialized.shares,
+      };
+    }),
+
+  clearDefaultSplit: groupProcedure
+    .input(z.object({ groupId: z.number() }))
+    .mutation(async ({ input, ctx }) => {
+      await ctx.db.groupDefaultSplit.deleteMany({ where: { groupId: input.groupId } });
+      return true;
+    }),
+
   updateGroupDetails: groupProcedure
-    .input(z.object({ name: z.string().min(1), groupId: z.number() }))
+    .input(
+      z.object({
+        name: z.string().min(1),
+        image: z.string().nullable().optional(),
+        groupId: z.number(),
+      }),
+    )
     .mutation(async ({ input, ctx }) => {
       const group = await ctx.db.group.findUnique({
         where: {
@@ -289,16 +363,13 @@ export const groupRouter = createTRPCRouter({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Group not found' });
       }
 
-      if (group.userId !== ctx.session.user.id) {
-        throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Only creator can update the group' });
-      }
-
       const updatedGroup = await ctx.db.group.update({
         where: {
           id: input.groupId,
         },
         data: {
           name: input.name,
+          image: input.image,
         },
       });
 

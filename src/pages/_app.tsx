@@ -1,33 +1,36 @@
+import i18nConfig from '@/next-i18next.config.js';
 import { clsx } from 'clsx';
+import { type Session } from 'next-auth';
+import { SessionProvider, useSession } from 'next-auth/react';
+import { appWithTranslation, useTranslation } from 'next-i18next';
 import { type AppType } from 'next/app';
 import { Poppins } from 'next/font/google';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
-import { type Session } from 'next-auth';
-import { SessionProvider, useSession } from 'next-auth/react';
 import { useEffect, useState } from 'react';
 import { Toaster } from 'sonner';
-import { appWithTranslation, useTranslation } from 'next-i18next';
-import i18nConfig from '@/next-i18next.config.js';
+import { LoadingSpinner } from '~/components/ui/spinner';
 import { ThemeProvider } from '~/components/ui/theme-provider';
 import { CurrencyHelpersProvider } from '~/contexts/CurrencyHelpersContext';
-import '~/styles/globals.css';
-import { LoadingSpinner } from '~/components/ui/spinner';
 import { env } from '~/env';
-import { parseCurrencyCode } from '~/lib/currency';
 import { useAddExpenseStore } from '~/store/addStore';
 import { useAppStore } from '~/store/appStore';
 import { type NextPageWithUser } from '~/types';
 import { api } from '~/utils/api';
 
+import 'react-easy-crop/react-easy-crop.css';
+import '~/styles/globals.css';
+
 const poppins = Poppins({ weight: ['200', '300', '400', '500', '600', '700'], subsets: ['latin'] });
 const toastOptions = { duration: 1500 };
 
-const MyApp: AppType<{ session: Session | null; baseUrl: string }> = ({
+const MyApp: AppType<{ session: Session | null; baseUrl: string; maxUploadFileSizeMB: number }> = ({
   Component,
-  pageProps: { session, baseUrl, ...pageProps },
+  pageProps: { session, baseUrl, maxUploadFileSizeMB, ...pageProps },
 }) => {
   const { t, ready } = useTranslation();
+  const { setMaxUploadFileSizeMB } = useAppStore((s) => s.actions);
+  setMaxUploadFileSizeMB(maxUploadFileSizeMB);
 
   if (!ready) {
     return (
@@ -120,8 +123,6 @@ const Auth: React.FC<{ Page: NextPageWithUser; pageProps: any }> = ({ Page, page
 
   useEffect(() => {
     if ('authenticated' === status && data.user) {
-      setCurrency(parseCurrencyCode(data.user.currency));
-
       if (!data.user.preferredLanguage) {
         // If user has no preferred language, set it to the current locale
         const currentLocale = router.locale ?? 'en';
@@ -182,6 +183,7 @@ const Auth: React.FC<{ Page: NextPageWithUser; pageProps: any }> = ({ Page, page
 export const getServerSideProps = () => ({
   props: {
     baseUrl: env.NEXTAUTH_URL,
+    maxUploadFileSizeMB: env.UPLOAD_MAX_FILE_SIZE_MB,
   },
 });
 

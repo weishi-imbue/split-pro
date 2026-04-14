@@ -18,8 +18,14 @@
     },
     "download_splitpro_data": "Download SplitPro data",
     "edit_name": {
+      "apply_avatar": "Apply avatar",
+      "avatar_label": "Profile picture",
+      "avatar_preview": "Avatar preview",
       "placeholder": "Enter name",
-      "title": "Edit name"
+      "remove_avatar": "Remove avatar",
+      "select_avatar": "Select picture",
+      "zoom": "Zoom",
+      "title": "Edit details"
     },
     "follow_on_x": "Follow us on X",
     "import_from_splitwise": "Import from Splitwise",
@@ -35,8 +41,8 @@
     },
     "logout": "Logout",
     "messages": {
-      "submit_error": "Failed to submit feedback",
-      "submit_success": "Feedback submitted"
+      "submit_error": "Failed to update details",
+      "submit_success": "Details updated"
     },
     "notifications": {
       "disable_notification": "Disable notification",
@@ -62,7 +68,10 @@
       "git": "Git",
       "version": "Version",
       "new_version_available": "A new version is available:",
-      "copy_failed": "Failed to copy debug info to clipboard"
+      "copy_failed": "Failed to copy debug info to clipboard",
+      "send_test_notification": "Send test notification",
+      "test_notification_sent": "Test notification sent",
+      "test_notification_failed": "Could not send test notification"
     }
   },
   "actions": {
@@ -127,7 +136,8 @@
     "import_failed": "Error importing file",
     "invalid_currency_code": "Invalid currency code {{code}}",
     "language_change_failed": "Error changing language",
-    "less_than": "File should be less than",
+    "less_than": "File should be less than {{size}}MB",
+    "image_compression_failed": "Image compression failed, trying to upload original file",
     "name_required": "Name is required",
     "notification_not_supported": "Notification is not supported",
     "otp_invalid": "Invalid OTP",
@@ -250,6 +260,9 @@
     "group_info": {
       "actions": "Actions",
       "archive_group": "Archive group",
+      "configure_default_split": "Configure default split",
+      "default_split": "Default split",
+      "edit_group": "Edit group",
       "archive_group_details": {
         "can_archive": "This group will be archived and hidden from your main groups list. You can still access it later if needed.",
         "cant_archive": "Cannot archive group with outstanding balances. All balances must be settled first.",
@@ -289,9 +302,11 @@
       "total_expenses": "Total expenses"
     },
     "messages": {
+      "default_split_cleared": "Default split cleared",
+      "default_split_updated": "Default split updated",
       "balances_recalculated": "Balances recalculated successfully",
       "group_archived": "Group archived successfully",
-      "group_name_updated": "Updated group name"
+      "group_name_updated": "Updated group details"
     },
     "no_members": {
       "add_members": "Add members",
@@ -321,6 +336,16 @@
     "application_name": "SplitPro",
     "description": "Split Expenses with your friends for free",
     "title": "SplitPro: Split Expenses with your friends for free"
+  },
+  "balances": {
+    "user_preferences": {
+      "title": "Preferences"
+    },
+    "default_split": {
+      "cleared": "Default split cleared",
+      "configure": "Default split",
+      "updated": "Default split updated"
+    }
   },
   "navigation": {
     "account": "Account",

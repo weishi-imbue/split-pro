@@ -3,13 +3,21 @@ import { type User } from 'next-auth';
 import { z } from 'zod';
 
 import { env } from '~/env';
+import {
+  deserializeDefaultSplit,
+  serializeDefaultSplit,
+  toSortedFriendPair,
+} from '~/lib/defaultSplit';
 import { simplifyDebts } from '~/lib/simplify';
 import { createTRPCRouter, protectedProcedure } from '~/server/api/trpc';
 import { db } from '~/server/db';
 import { sendFeedbackEmail, sendInviteEmail } from '~/server/mailer';
 import { SplitwiseGroupSchema, SplitwiseUserSchema } from '~/types';
 
-// Import { sendExpensePushNotification } from '../services/notificationService';
+import {
+  getSubscriptionEndpoint,
+  sendPushNotificationToUsers,
+} from '../services/notificationService';
 import {
   getCompleteFriendsDetails,
   getCompleteGroupDetails,
@@ -139,6 +147,7 @@ export const userRouter = createTRPCRouter({
     .input(
       z.object({
         name: z.string().optional(),
+        image: z.string().nullable().optional(),
         currency: z.string().optional(),
         obapiProviderId: z.string().optional(),
         bankingId: z.string().optional(),
@@ -190,18 +199,124 @@ export const userRouter = createTRPCRouter({
         },
       });
 
-      return friend;
+      if (!friend) {
+        return friend;
+      }
+
+      const [userAId, userBId] = toSortedFriendPair(ctx.session.user.id, input.friendId);
+
+      const friendDefaultSplit = await db.friendDefaultSplit.findUnique({
+        where: {
+          userAId_userBId: {
+            userAId,
+            userBId,
+          },
+        },
+      });
+
+      const defaultSplit =
+        friendDefaultSplit &&
+        (() => {
+          const parsedShares = z
+            .record(z.string(), z.string())
+            .safeParse(friendDefaultSplit.shares);
+          if (!parsedShares.success) {
+            return null;
+          }
+
+          return deserializeDefaultSplit({
+            splitType: friendDefaultSplit.splitType,
+            shares: parsedShares.data,
+          });
+        })();
+
+      return {
+        ...friend,
+        defaultSplit: defaultSplit ? serializeDefaultSplit(defaultSplit) : null,
+      };
+    }),
+
+  upsertFriendDefaultSplit: protectedProcedure
+    .input(
+      z.object({
+        friendId: z.number(),
+        defaultSplit: z.object({
+          splitType: z.enum(['EQUAL', 'PERCENTAGE', 'SHARE']),
+          shares: z.record(z.string(), z.string()),
+        }),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const friend = await db.user.findUnique({
+        where: {
+          id: input.friendId,
+          userBalances: {
+            some: {
+              friendId: ctx.session.user.id,
+            },
+          },
+        },
+      });
+
+      if (!friend) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Friend not found' });
+      }
+
+      const parsed = deserializeDefaultSplit(input.defaultSplit);
+      if (!parsed) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Malformed default split' });
+      }
+
+      const [userAId, userBId] = toSortedFriendPair(ctx.session.user.id, input.friendId);
+      const serialized = serializeDefaultSplit(parsed);
+
+      await db.friendDefaultSplit.upsert({
+        where: { userAId_userBId: { userAId, userBId } },
+        create: {
+          userAId,
+          userBId,
+          splitType: serialized.splitType,
+          shares: serialized.shares,
+        },
+        update: {
+          splitType: serialized.splitType,
+          shares: serialized.shares,
+        },
+      });
+
+      return serialized;
+    }),
+
+  clearFriendDefaultSplit: protectedProcedure
+    .input(z.object({ friendId: z.number() }))
+    .mutation(async ({ input, ctx }) => {
+      const [userAId, userBId] = toSortedFriendPair(ctx.session.user.id, input.friendId);
+      await db.friendDefaultSplit.deleteMany({ where: { userAId, userBId } });
+      return true;
     }),
 
   updatePushNotification: protectedProcedure
     .input(z.object({ subscription: z.string() }))
     .mutation(async ({ input, ctx }) => {
+      const endpoint = getSubscriptionEndpoint(input.subscription);
+
+      if (!endpoint) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Invalid push subscription payload',
+        });
+      }
+
       await db.pushNotification.upsert({
         where: {
-          userId: ctx.session.user.id,
+          userId_endpoint: {
+            userId: ctx.session.user.id,
+            endpoint,
+          },
         },
         create: {
           userId: ctx.session.user.id,
+          endpoint,
           subscription: input.subscription,
         },
         update: {
@@ -209,6 +324,38 @@ export const userRouter = createTRPCRouter({
         },
       });
     }),
+
+  deletePushNotification: protectedProcedure
+    .input(z.object({ subscription: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const endpoint = getSubscriptionEndpoint(input.subscription);
+      if (!endpoint) {
+        return;
+      }
+
+      await db.pushNotification
+        .delete({
+          where: {
+            userId_endpoint: {
+              userId: ctx.session.user.id,
+              endpoint,
+            },
+          },
+        })
+        .catch(() => null);
+    }),
+
+  sendTestPushNotification: protectedProcedure.mutation(async ({ ctx }) => {
+    const { sentCount } = await sendPushNotificationToUsers([ctx.session.user.id], {
+      title: 'SplitPro',
+      message: 'Test notification from debug info',
+      data: {
+        url: '/account',
+      },
+    });
+
+    return { sentCount };
+  }),
 
   deleteFriend: protectedProcedure
     .input(z.object({ friendId: z.number() }))
